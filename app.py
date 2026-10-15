@@ -1,7 +1,7 @@
 # app.py
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLineEdit, QPushButton, QLabel, QMessageBox, QDialog, QTextEdit,
+    QLineEdit, QPushButton, QLabel, QMessageBox, QDialog, QTextEdit, QFileDialog,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QTabWidget, QScrollArea
 )
@@ -532,26 +532,89 @@ class ApartmanAidatApp(QWidget):
         periods = self.db.get_all_debt_periods(int(daire_id))
         total = sum(p[1] for p in periods) if periods else 0.0
 
-        # build text
-        text = f"Toplam Borç: {total:.2f} TL\n\nDönemler:\n"
-        if periods:
-            for donem, kalan in periods:
-                text += f"- {donem}: {kalan:.2f} TL\n"
-        else:
-            text += "Borç yok.\n"
-
+        # build detail dialog with a table and copy/pdf buttons
         dlg = QDialog(self)
         dlg.setWindowTitle("Borç Detayları")
-        dlg.setMinimumSize(400, 300)
+        dlg.setMinimumSize(480, 360)
         lay = QVBoxLayout(dlg)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(text)
-        lay.addWidget(te)
 
-        btn = QPushButton("Kapat")
-        btn.clicked.connect(dlg.accept)
-        lay.addWidget(btn)
+        # total label
+        lbl_total = QLabel(f"Toplam Borç: {total:.2f} TL")
+        if total > 0:
+            lbl_total.setStyleSheet("font-size:16px; font-weight:bold; color: #c0392b;")
+        else:
+            lbl_total.setStyleSheet("font-size:16px; font-weight:bold; color: #27ae60;")
+        lay.addWidget(lbl_total)
+
+        # periods table
+        tbl = QTableWidget(0, 2)
+        tbl.setHorizontalHeaderLabels(["Dönem", "Kalan (TL)"])
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        tbl.setAlternatingRowColors(True)
+        for donem, kalan in periods:
+            r = tbl.rowCount()
+            tbl.insertRow(r)
+            tbl.setItem(r, 0, QTableWidgetItem(str(donem)))
+            item_amt = QTableWidgetItem(f"{float(kalan):.2f}")
+            item_amt.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tbl.setItem(r, 1, item_amt)
+        lay.addWidget(tbl)
+
+        # buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_copy = QPushButton("Kopyala")
+        btn_pdf = QPushButton("PDF Kaydet")
+        btn_close = QPushButton("Kapat")
+        btn_row.addWidget(btn_copy)
+        btn_row.addWidget(btn_pdf)
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+        def do_copy():
+            s = f"Toplam Borç: {total:.2f} TL\n\nDönemler:\n"
+            if periods:
+                for d, k in periods:
+                    s += f"{d}\t{float(k):.2f} TL\n"
+            else:
+                s += "Borç yok.\n"
+            QApplication.clipboard().setText(s)
+            QMessageBox.information(dlg, "Kopyalandı", "Borç detayları panoya kopyalandı.")
+
+        def do_pdf():
+            path, _ = QFileDialog.getSaveFileName(dlg, "PDF Kaydet", f"borc_{daire_id}.pdf", "PDF Files (*.pdf)")
+            if not path:
+                return
+            try:
+                # use QPdfWriter + QPainter to render simple text
+                from PySide6.QtGui import QPdfWriter, QPainter, QFont
+                pdf = QPdfWriter(path)
+                pdf.setPageOrientation(pdf.Portrait)
+                pdf.setPageSizeMM(pdf.pageSizeMM())
+                painter = QPainter(pdf)
+                font = QFont("Times", 12)
+                painter.setFont(font)
+                x = 50
+                y = 50
+                painter.drawText(x, y, f"Borç Detayları - Daire ID: {daire_id}")
+                y += 30
+                painter.drawText(x, y, f"Toplam Borç: {total:.2f} TL")
+                y += 30
+                if periods:
+                    for donem, kalan in periods:
+                        painter.drawText(x, y, f"{donem}: {float(kalan):.2f} TL")
+                        y += 20
+                else:
+                    painter.drawText(x, y, "Borç yok.")
+                painter.end()
+                QMessageBox.information(dlg, "Kaydedildi", f"PDF kaydedildi: {path}")
+            except Exception as e:
+                QMessageBox.warning(dlg, "Hata", f"PDF oluşturulamadı: {e}")
+
+        btn_copy.clicked.connect(do_copy)
+        btn_pdf.clicked.connect(do_pdf)
+        btn_close.clicked.connect(dlg.accept)
 
         dlg.exec()
 
