@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QPushButton, QLabel, QMessageBox,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QGroupBox, QTabWidget
+    QGroupBox, QTabWidget, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -11,8 +11,9 @@ from PySide6.QtGui import QColor
 from db_manager import DbManager
 from finance_service import validate_period, safe_float, ym_of_today, iso_today, status_for_balance
 
-from gider_rapor import GiderRaporWidget 
+from gider_rapor import GiderRaporWidget
 from kasa_export import KasaExportWidget
+
 
 class ApartmanAidatApp(QWidget):
     def __init__(self):
@@ -30,7 +31,8 @@ class ApartmanAidatApp(QWidget):
         outer.addWidget(self.tabs)
 
         main_tab = QWidget()
-        root = QVBoxLayout(main_tab)
+        main_content = QWidget()
+        root = QVBoxLayout(main_content)
 
         title = QLabel("Apartman Aidat Sistemi")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
@@ -59,6 +61,7 @@ class ApartmanAidatApp(QWidget):
         self.tbl_daire.setHorizontalHeaderLabels(["ID", "Daire", "İsim", "Telefon", "Aidat", "Aktif"])
         self.tbl_daire.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_daire.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_daire.setMinimumHeight(140)
         root.addWidget(self.tbl_daire)
 
         # ---------- Tahakkuk ----------
@@ -117,6 +120,7 @@ class ApartmanAidatApp(QWidget):
         self.tbl_borc.setHorizontalHeaderLabels(["Dönem", "Borç", "Kalan"])
         self.tbl_borc.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_borc.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_borc.setMinimumHeight(120)
         root.addWidget(self.tbl_borc)
 
         # ---------- Gider ----------
@@ -150,7 +154,7 @@ class ApartmanAidatApp(QWidget):
         self.tbl_gider.setHorizontalHeaderLabels(["ID", "Dönem", "Tarih", "Kategori", "Tutar", "Yöntem", "Açıklama"])
         self.tbl_gider.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_gider.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-
+        self.tbl_gider.setMaximumHeight(220)
         gbox.addWidget(self.tbl_gider)
         root.addWidget(gb_gider)
 
@@ -183,11 +187,11 @@ class ApartmanAidatApp(QWidget):
         ])
         self.tbl_rapor.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_rapor.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_rapor.setMinimumHeight(220)
         rbox.addWidget(self.tbl_rapor)
 
         root.addWidget(gb_rapor)
 
-        # refresh bar
         refresh_row = QHBoxLayout()
         self.btn_refresh_all = QPushButton("Yenile")
         self.btn_refresh_all.clicked.connect(self.refresh_all)
@@ -195,7 +199,11 @@ class ApartmanAidatApp(QWidget):
         refresh_row.addWidget(self.btn_refresh_all)
         root.addLayout(refresh_row)
 
-        self.tabs.addTab(main_tab, "Yönetim Paneli")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(main_content)
+
+        self.tabs.addTab(scroll, "Yönetim Paneli")
         self.gider_rapor = GiderRaporWidget(self.db)
         self.tabs.addTab(self.gider_rapor, "Gider & Rapor")
         self.kasa_widget = KasaExportWidget(self.db)
@@ -441,10 +449,8 @@ class ApartmanAidatApp(QWidget):
         for daire_id, daire_no, ad, tel, aidat, aktif in rows:
             borc, odeme, bakiye = self.db.get_balance_for_period(int(daire_id), donem)
             summary["borc"] += borc
-            total_borc, total_odeme, total_bakiye = self.db.get_total_balance(int(daire_id))
 
             durum = status_for_balance(donem, bakiye)
-
             if self.r_only_unpaid.currentText() == "Sadece borçlu" and bakiye <= 0:
                 continue
             if self.r_only_unpaid.currentText() == "Sadece geciken" and durum != "Gecikmiş":
@@ -458,7 +464,7 @@ class ApartmanAidatApp(QWidget):
                 "period_borc": borc,
                 "period_odeme": odeme,
                 "period_bakiye": bakiye,
-                "durum": durum
+                "durum": durum,
             })
 
         gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
@@ -480,7 +486,6 @@ class ApartmanAidatApp(QWidget):
         for r in out_rows:
             row = self.tbl_rapor.rowCount()
             self.tbl_rapor.insertRow(row)
-
             vals = [
                 r["daire_no"],
                 r["ad"],
@@ -489,7 +494,7 @@ class ApartmanAidatApp(QWidget):
                 f"{float(r['period_borc']):.2f}",
                 f"{float(r['period_odeme']):.2f}",
                 f"{float(r['period_bakiye']):.2f}",
-                r["durum"]
+                r["durum"],
             ]
 
             for c, val in enumerate(vals):
