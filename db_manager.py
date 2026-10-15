@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from finance_service import safe_float, validate_period
+from finance_service import safe_float, validate_period, months_range, iso_today
 
 DB_PATH = Path("apartman_aidat.db")
 
@@ -201,6 +201,110 @@ def get_all_debt_periods(daire_id: int, db_path: str | Path = DB_PATH):
     return result
 
 
+# Adapter class to provide the DbManager API expected by the UI code
+class DbManager:
+    def __init__(self, db_path: str | Path = DB_PATH):
+        self.db_path = db_path
+
+    def init_db(self):
+        ensure_db(self.db_path)
+
+    def connect(self):
+        return connect(self.db_path)
+
+    def allocate_payment(self, total_amount: float, due_periods: list[tuple[str, float]]):
+        return allocate_payment(total_amount, due_periods)
+
+    def get_all_daireler(self):
+        con = self.connect()
+        rows = con.execute("SELECT id, daire_no, ad_soyad, telefon, aidat, aktif FROM daireler ORDER BY CAST(daire_no AS INTEGER), daire_no").fetchall()
+        con.close()
+        return rows
+
+    def add_or_update_daire(self, daire_no: str, ad: str, telefon: str, aidat: float, aktif: int = 1):
+        con = self.connect()
+        try:
+            cur = con.execute("SELECT id FROM daireler WHERE daire_no = ?", (daire_no,)).fetchone()
+            if cur:
+                con.execute("UPDATE daireler SET ad_soyad=?, telefon=?, aidat=?, aktif=? WHERE id=?",
+                            (ad, telefon, float(aidat), int(aktif), int(cur[0])))
+                did = int(cur[0])
+            else:
+                con.execute("INSERT INTO daireler(daire_no, ad_soyad, telefon, aidat, aktif) VALUES(?,?,?,?,?)",
+                            (daire_no, ad, telefon, float(aidat), int(aktif)))
+                did = con.execute("SELECT id FROM daireler WHERE daire_no=?", (daire_no,)).fetchone()[0]
+            con.commit()
+            return int(did)
+        finally:
+            con.close()
+
+    def add_tahakkuk_range(self, daire_id: int, start: str, end: str, tutar: float) -> int:
+        con = self.connect()
+        adet = 0
+        try:
+            for donem in months_range(start, end):
+                con.execute("""
+                    INSERT INTO tahakkuk(donem, daire_id, tutar, created_at)
+                    VALUES(?,?,?,?)
+                    ON CONFLICT(donem, daire_id) DO UPDATE SET tutar=excluded.tutar, created_at=excluded.created_at
+                """, (donem, int(daire_id), float(tutar), iso_today()))
+                adet += 1
+            con.commit()
+            return adet
+        finally:
+            con.close()
+
+    def get_balance_for_period(self, daire_id: int, donem: str):
+        con = self.connect()
+        try:
+            borc = con.execute("SELECT COALESCE(SUM(tutar),0) FROM tahakkuk WHERE donem=? AND daire_id=?",
+                                (donem, int(daire_id))).fetchone()[0] or 0.0
+            odeme = con.execute(
+                "SELECT COALESCE(SUM(od.tutar),0) FROM odeme_detay od JOIN odemeler o ON o.id = od.odeme_id WHERE od.donem=? AND o.daire_id=?",
+                (donem, int(daire_id))).fetchone()[0] or 0.0
+            return float(borc), float(odeme), float(borc) - float(odeme)
+        finally:
+            con.close()
+
+    def get_total_balance(self, daire_id: int):
+        con = self.connect()
+        try:
+            borc = con.execute("SELECT COALESCE(SUM(tutar),0) FROM tahakkuk WHERE daire_id=?", (int(daire_id),)).fetchone()[0] or 0.0
+            odeme = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE daire_id=?", (int(daire_id),)).fetchone()[0] or 0.0
+            return float(borc), float(odeme), float(borc) - float(odeme)
+        finally:
+            con.close()
+
+    def get_all_debt_periods(self, daire_id: int):
+        # adapt the module function which returns (donem, borc, odenen)
+        rows = get_all_debt_periods(int(daire_id), self.db_path)
+        out = []
+        for donem, borc, odenen in rows:
+            kalan = float(borc) - float(odenen)
+            out.append((donem, kalan))
+        return out
+
+    def save_payment(self, daire_id: int, allocations: list[tuple[str, float]], tarih: str, yontem: str, aciklama: str):
+        # Determine receipt period and number
+        period = allocations[0][0] if allocations else iso_today()[:7]
+        makbuz = receipt_next_for_period(period, self.db_path)
+
+        con = self.connect()
+        try:
+            total = sum(float(a[1]) for a in allocations)
+            cur = con.execute(
+                "INSERT INTO odemeler(donem, tarih, daire_id, tutar, yontem, makbuz_no, aciklama) VALUES(?,?,?,?,?,?,?)",
+                (period, tarih, int(daire_id), float(total), yontem, makbuz, aciklama)
+            )
+            odeme_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+            for donem, amt in allocations:
+                con.execute("INSERT INTO odeme_detay(odeme_id, donem, tutar) VALUES(?,?,?)", (int(odeme_id), donem, float(amt)))
+            con.commit()
+        finally:
+            con.close()
+        return makbuz
+
+
 __all__ = [
     "DB_PATH",
     "connect",
@@ -211,4 +315,5 @@ __all__ = [
     "allocate_payment",
     "save_payment_record",
     "get_all_debt_periods",
+    "DbManager",
 ]
