@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QGroupBox, QComboBox, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox
@@ -92,7 +92,6 @@ class GiderRaporWidget(QWidget):
 
         root.addWidget(gb_rapor)
 
-    # ----------------- Gider işlemleri -----------------
     def save_expense(self):
         donem = self.g_donem.text().strip()
         if not validate_period(donem):
@@ -150,7 +149,6 @@ class GiderRaporWidget(QWidget):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.tbl_gider.setItem(row, c, item)
 
-    # ----------------- Rapor işlemleri -----------------
     def refresh_report(self):
         donem = self.r_donem.text().strip()
         if not validate_period(donem):
