@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QPushButton, QLabel, QMessageBox,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QGroupBox
+    QGroupBox, QTabWidget
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -25,7 +25,12 @@ class ApartmanAidatApp(QWidget):
         self.refresh_all()
 
     def build_ui(self):
-        root = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        outer = QVBoxLayout(self)
+        outer.addWidget(self.tabs)
+
+        main_tab = QWidget()
+        root = QVBoxLayout(main_tab)
 
         title = QLabel("Apartman Aidat Sistemi")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
@@ -189,16 +194,13 @@ class ApartmanAidatApp(QWidget):
         refresh_row.addStretch()
         refresh_row.addWidget(self.btn_refresh_all)
         root.addLayout(refresh_row)
-        
-        self.tabs.addTab(main_tab, "Yönetim Paneli")
 
+        self.tabs.addTab(main_tab, "Yönetim Paneli")
         self.gider_rapor = GiderRaporWidget(self.db)
         self.tabs.addTab(self.gider_rapor, "Gider & Rapor")
-
         self.kasa_widget = KasaExportWidget(self.db)
         self.tabs.addTab(self.kasa_widget, "Kasa")
 
-        
     # ----------------- Daire işlemleri -----------------
     def save_daire(self):
         dno = self.daire_no.text().strip()
@@ -441,7 +443,6 @@ class ApartmanAidatApp(QWidget):
             summary["borc"] += borc
             total_borc, total_odeme, total_bakiye = self.db.get_total_balance(int(daire_id))
 
-            # durum
             durum = status_for_balance(donem, bakiye)
 
             if self.r_only_unpaid.currentText() == "Sadece borçlu" and bakiye <= 0:
@@ -460,12 +461,11 @@ class ApartmanAidatApp(QWidget):
                 "durum": durum
             })
 
-            # gelir/gider toplamı
-            gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
-            gider = con.execute("SELECT COALESCE(SUM(tutar),0) FROM giderler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
-            summary["gelir"] = float(gelir)
-            summary["gider"] = float(gider)
-            summary["net"] = summary["gelir"] - summary["gider"]
+        gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
+        gider = con.execute("SELECT COALESCE(SUM(tutar),0) FROM giderler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
+        summary["gelir"] = float(gelir)
+        summary["gider"] = float(gider)
+        summary["net"] = summary["gelir"] - summary["gider"]
 
         con.close()
 
