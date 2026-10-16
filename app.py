@@ -1,7 +1,7 @@
 # app.py
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLineEdit, QPushButton, QLabel, QMessageBox,
+    QLineEdit, QPushButton, QLabel, QMessageBox, QDialog,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QTabWidget
 )
@@ -11,8 +11,9 @@ from PySide6.QtGui import QColor
 from db_manager import DbManager
 from finance_service import validate_period, safe_float, ym_of_today, iso_today, status_for_balance
 
-from gider_rapor import GiderRaporWidget 
+from gider_rapor import GiderRaporWidget
 from kasa_export import KasaExportWidget
+
 
 class ApartmanAidatApp(QWidget):
     def __init__(self):
@@ -59,6 +60,7 @@ class ApartmanAidatApp(QWidget):
         self.tbl_daire.setHorizontalHeaderLabels(["ID", "Daire", "İsim", "Telefon", "Aidat", "Aktif"])
         self.tbl_daire.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_daire.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_daire.itemDoubleClicked.connect(self.on_daire_item_double_clicked)
         root.addWidget(self.tbl_daire)
 
         # ---------- Tahakkuk ----------
@@ -150,6 +152,7 @@ class ApartmanAidatApp(QWidget):
         self.tbl_gider.setHorizontalHeaderLabels(["ID", "Dönem", "Tarih", "Kategori", "Tutar", "Yöntem", "Açıklama"])
         self.tbl_gider.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_gider.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_gider.itemDoubleClicked.connect(self.on_gider_item_double_clicked)
 
         gbox.addWidget(self.tbl_gider)
         root.addWidget(gb_gider)
@@ -187,7 +190,6 @@ class ApartmanAidatApp(QWidget):
 
         root.addWidget(gb_rapor)
 
-        # refresh bar
         refresh_row = QHBoxLayout()
         self.btn_refresh_all = QPushButton("Yenile")
         self.btn_refresh_all.clicked.connect(self.refresh_all)
@@ -214,6 +216,15 @@ class ApartmanAidatApp(QWidget):
 
         if not dno or not ad:
             QMessageBox.warning(self, "Uyarı", "Daire No ve İsim zorunlu.")
+            return
+
+        ok = QMessageBox.question(
+            self,
+            "Onay",
+            f"Daire kaydedilsin mi?\nDaire: {dno}\nAd: {ad}\nAidat: {aidat}",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ok != QMessageBox.Yes:
             return
 
         did = self.db.add_or_update_daire(dno, ad, tel, aidat, 1)
@@ -245,6 +256,88 @@ class ApartmanAidatApp(QWidget):
             self.t_daire_combo.addItem(display, did)
             self.p_daire_combo.addItem(display, did)
 
+    def on_daire_item_double_clicked(self, item):
+        row = item.row()
+        id_item = self.tbl_daire.item(row, 0)
+        if not id_item:
+            return
+        try:
+            did = int(id_item.text())
+        except Exception:
+            return
+
+        dno = self.tbl_daire.item(row, 1).text() if self.tbl_daire.item(row, 1) else ""
+        ad = self.tbl_daire.item(row, 2).text() if self.tbl_daire.item(row, 2) else ""
+        tel = self.tbl_daire.item(row, 3).text() if self.tbl_daire.item(row, 3) else ""
+        aidat = self.tbl_daire.item(row, 4).text() if self.tbl_daire.item(row, 4) else "0"
+        aktif = self.tbl_daire.item(row, 5).text() if self.tbl_daire.item(row, 5) else "1"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Daire Düzenle")
+        form = QFormLayout(dlg)
+
+        e_dno = QLineEdit(dno)
+        e_ad = QLineEdit(ad)
+        e_tel = QLineEdit(tel)
+        e_aidat = QLineEdit(aidat)
+        e_aktif = QComboBox()
+        e_aktif.addItems(["0", "1"])
+        e_aktif.setCurrentIndex(0 if str(aktif) in ("0", "False", "false") else 1)
+
+        form.addRow("Daire No", e_dno)
+        form.addRow("Ad Soyad", e_ad)
+        form.addRow("Telefon", e_tel)
+        form.addRow("Aidat", e_aidat)
+        form.addRow("Aktif", e_aktif)
+
+        btn_row = QHBoxLayout()
+        btn_save = QPushButton("Kaydet")
+        btn_cancel = QPushButton("İptal")
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_cancel)
+        form.addRow(btn_row)
+
+        def do_save():
+            new_dno = e_dno.text().strip()
+            new_ad = e_ad.text().strip()
+            new_tel = e_tel.text().strip()
+            try:
+                new_aidat = safe_float(e_aidat.text())
+            except Exception:
+                QMessageBox.warning(dlg, "Uyarı", "Aidat sayısal olmalı.")
+                return
+
+            if not new_dno or not new_ad:
+                QMessageBox.warning(dlg, "Uyarı", "Daire No ve İsim zorunlu.")
+                return
+
+            ok = QMessageBox.question(
+                dlg,
+                "Onay",
+                f"Değişiklikler kaydedilsin mi?\nDaire: {new_dno}\nAd: {new_ad}\nAidat: {new_aidat}",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if ok != QMessageBox.Yes:
+                return
+
+            con = self.db.connect()
+            try:
+                con.execute(
+                    "UPDATE daireler SET daire_no=?, ad_soyad=?, telefon=?, aidat=?, aktif=? WHERE id=?",
+                    (new_dno, new_ad, new_tel, float(new_aidat), 1 if e_aktif.currentText() == "1" else 0, int(did)),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            QMessageBox.information(dlg, "OK", "Daire güncellendi.")
+            dlg.accept()
+            self.refresh_all()
+
+        btn_save.clicked.connect(do_save)
+        btn_cancel.clicked.connect(dlg.reject)
+        dlg.exec()
+
     # ----------------- Tahakkuk işlemleri -----------------
     def create_tahakkuk(self):
         daire_id = self.t_daire_combo.currentData()
@@ -270,6 +363,15 @@ class ApartmanAidatApp(QWidget):
 
         if tutar <= 0:
             QMessageBox.warning(self, "Uyarı", "Tutar 0'dan büyük olmalı.")
+            return
+
+        ok = QMessageBox.question(
+            self,
+            "Onay",
+            f"Tahakkuk kaydedilsin mi?\nDaire ID: {daire_id}\nDönem: {start} - {end}\nTutar: {tutar:.2f}",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ok != QMessageBox.Yes:
             return
 
         adet = self.db.add_tahakkuk_range(int(daire_id), start, end, tutar)
@@ -327,6 +429,15 @@ class ApartmanAidatApp(QWidget):
                 QMessageBox.information(self, "Bilgi", "Bu dairenin borcu yok.")
                 return
 
+        ok = QMessageBox.question(
+            self,
+            "Onay",
+            f"Ödeme kaydedilsin mi?\nDaire ID: {daire_id}\nTutar: {tutar:.2f} TL\nDönem: {donem}\nYöntem: {self.p_yontem.currentText()}",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ok != QMessageBox.Yes:
+            return
+
         allocations = self.db.allocate_payment(tutar, due)
         if not allocations:
             QMessageBox.warning(self, "Uyarı", "Dağıtım yapılamadı.")
@@ -381,6 +492,15 @@ class ApartmanAidatApp(QWidget):
         yontem = self.g_yontem.currentText()
         aciklama = self.g_aciklama.text().strip()
 
+        ok = QMessageBox.question(
+            self,
+            "Onay",
+            f"Gider kaydedilsin mi?\nDönem: {donem}\nTutar: {tutar:.2f} TL\nKategori: {kat}",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ok != QMessageBox.Yes:
+            return
+
         con = self.db.connect()
         try:
             con.execute("""
@@ -415,6 +535,107 @@ class ApartmanAidatApp(QWidget):
                 if c == 4:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.tbl_gider.setItem(row, c, item)
+
+    def on_gider_item_double_clicked(self, item):
+        row = item.row()
+        id_item = self.tbl_gider.item(row, 0)
+        if not id_item:
+            return
+        try:
+            gid = int(id_item.text())
+        except Exception:
+            return
+
+        con = self.db.connect()
+        try:
+            r = con.execute(
+                "SELECT donem, tarih, kategori, tutar, yontem, aciklama FROM giderler WHERE id=?",
+                (gid,),
+            ).fetchone()
+        finally:
+            con.close()
+
+        if not r:
+            QMessageBox.warning(self, "Hata", "Kayıt bulunamadı.")
+            return
+
+        donem, tarih, kategori, tutar, yontem, aciklama = r
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Gider Düzenle")
+        form = QFormLayout(dlg)
+
+        e_donem = QLineEdit(donem)
+        e_tarih = QLineEdit(tarih)
+        e_kategori = QComboBox()
+        e_kategori.addItems(["Elektrik", "Temizlik", "Bakım", "Diğer"])
+        idx = e_kategori.findText(str(kategori))
+        if idx >= 0:
+            e_kategori.setCurrentIndex(idx)
+
+        e_tutar = QLineEdit(f"{float(tutar):.2f}")
+        e_yontem = QComboBox()
+        e_yontem.addItems(["Banka", "Elden"])
+        idx2 = e_yontem.findText(str(yontem))
+        if idx2 >= 0:
+            e_yontem.setCurrentIndex(idx2)
+        e_aciklama = QLineEdit(aciklama or "")
+
+        form.addRow("Dönem", e_donem)
+        form.addRow("Tarih (yyyy-mm-dd)", e_tarih)
+        form.addRow("Kategori", e_kategori)
+        form.addRow("Tutar (TL)", e_tutar)
+        form.addRow("Yöntem", e_yontem)
+        form.addRow("Açıklama", e_aciklama)
+
+        btn_row = QHBoxLayout()
+        btn_save = QPushButton("Kaydet")
+        btn_cancel = QPushButton("İptal")
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_cancel)
+        form.addRow(btn_row)
+
+        def do_save():
+            new_donem = e_donem.text().strip()
+            new_tarih = e_tarih.text().strip()
+            new_kat = e_kategori.currentText()
+            try:
+                new_tutar = safe_float(e_tutar.text())
+            except Exception:
+                QMessageBox.warning(dlg, "Uyarı", "Tutar sayısal olmalı.")
+                return
+            if new_tutar <= 0:
+                QMessageBox.warning(dlg, "Uyarı", "Tutar 0'dan büyük olmalı.")
+                return
+            new_yontem = e_yontem.currentText()
+            new_acik = e_aciklama.text().strip()
+
+            ok = QMessageBox.question(
+                dlg,
+                "Onay",
+                f"Gider güncellensin mi?\nDönem: {new_donem}\nTutar: {new_tutar:.2f} TL",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if ok != QMessageBox.Yes:
+                return
+
+            con2 = self.db.connect()
+            try:
+                con2.execute(
+                    "UPDATE giderler SET donem=?, tarih=?, kategori=?, tutar=?, yontem=?, aciklama=? WHERE id=?",
+                    (new_donem, new_tarih, new_kat, float(new_tutar), new_yontem, new_acik, int(gid)),
+                )
+                con2.commit()
+            finally:
+                con2.close()
+
+            QMessageBox.information(dlg, "OK", "Gider güncellendi.")
+            dlg.accept()
+            self.refresh_expense_table()
+
+        btn_save.clicked.connect(do_save)
+        btn_cancel.clicked.connect(dlg.reject)
+        dlg.exec()
 
     # ----------------- Rapor işlemleri -----------------
     def refresh_report(self):
