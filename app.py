@@ -527,7 +527,7 @@ class ApartmanAidatApp(QWidget):
             QMessageBox.warning(self, "Uyarı", "Lütfen makbuzunu almak istediğiniz ödemeyi tablodan seçin.")
             return
 
-        # Seçili satırdan temel bilgileri alıyoruz
+        # Seçili satırdan temel bilgileri al��yoruz
         payment_id = self.tbl_gecmis_odemeler.item(selected_row, 0).text()
         donem = self.tbl_gecmis_odemeler.item(selected_row, 1).text()
         tarih = self.tbl_gecmis_odemeler.item(selected_row, 2).text()
@@ -546,77 +546,93 @@ class ApartmanAidatApp(QWidget):
             return
 
         try:
-            from PySide6.QtGui import QPdfWriter, QPainter, QFont, QPen, QPageLayout, QPageSize
+            from PySide6.QtGui import QPdfWriter, QPainter, QFont, QPen, QPageLayout, QPageSize, QColor
             
             pdf = QPdfWriter(path)
-            
-            # Sayfa yapısını modern yöntemle A4 ve Dikey (Portrait) olarak ayarlıyoruz
+            # Use a proper page layout (A4 Portrait)
             layout = QPageLayout()
             layout.setPageSize(QPageSize(QPageSize.A4))
             layout.setOrientation(QPageLayout.Portrait)
             pdf.setPageLayout(layout)
-            
+
             painter = QPainter(pdf)
-            
+            page_rect = pdf.pageRect()  # QRectF
+            pw = int(page_rect.width())
+            ph = int(page_rect.height())
+            margin = 40
+
             # Yazı Tipleri
             font_title = QFont("Helvetica", 14, QFont.Bold)
             font_subtitle = QFont("Helvetica", 11, QFont.Bold)
             font_body = QFont("Helvetica", 11)
             font_footer = QFont("Helvetica", 9, QFont.StyleItalic)
 
-            # Çerçeve Çizimi (Koordinatlar PySide6 çözünürlüğüne göre ölçeklendi)
-            pen = QPen(QColor(44, 62, 80), 4)
+            # Çerçeve Çizimi (sayı sayfa boyutuna göre)
+            pen = QPen(QColor(44, 62, 80), 3)
             painter.setPen(pen)
-            painter.drawRect(200, 200, 4500, 2800) # Makbuz dış kutusu
+            painter.drawRect(margin, margin, pw - 2 * margin, ph - 2 * margin)  # Makbuz dış kutusu
+
+            x_left = margin + 20
+            x_right = pw - margin - 200
+            y = margin + 30
+            line_h = 36
 
             # Başlık Grubu
             painter.setFont(font_title)
             painter.setPen(QPen(QColor(44, 62, 80)))
-            painter.drawText(400, 500, "AİDAT TAHSİLAT MAKBUZU")
-            
+            painter.drawText(x_left, y, "AİDAT TAHSİLAT MAKBUZU")
+
             painter.setFont(font_body)
             painter.setPen(QPen(QColor(0, 0, 0)))
-            painter.drawText(3500, 500, f"Makbuz No: {payment_id}")
-            painter.drawText(3500, 700, f"Tarih: {tarih}")
+            painter.drawText(x_right, y, f"Makbuz No: {payment_id}")
+            y += line_h
+            painter.drawText(x_right, y, f"Tarih: {tarih}")
 
+            y += line_h
             # Ayırıcı Çizgi
-            painter.setPen(QPen(QColor(189, 195, 199), 2))
-            painter.drawLine(400, 900, 4300, 900)
+            painter.setPen(QPen(QColor(189, 195, 199), 1))
+            painter.drawLine(x_left, y, pw - margin - 20, y)
 
+            y += line_h
             # İçerik Alanı
             painter.setPen(QPen(QColor(0, 0, 0)))
             painter.setFont(font_subtitle)
-            painter.drawText(400, 1200, "Daire Bilgisi:")
+            painter.drawText(x_left, y, "Daire Bilgisi:")
             painter.setFont(font_body)
-            painter.drawText(1500, 1200, daire_text)
+            painter.drawText(x_left + 140, y, daire_text)
 
+            y += line_h
             painter.setFont(font_subtitle)
-            painter.drawText(400, 1500, "Ödeme Dönemi:")
+            painter.drawText(x_left, y, "Ödeme Dönemi:")
             painter.setFont(font_body)
-            painter.drawText(1500, 1500, f"{donem} Dönemi Aidatı")
+            painter.drawText(x_left + 140, y, f"{donem} Dönemi Aidatı")
 
+            y += line_h
             painter.setFont(font_subtitle)
-            painter.drawText(400, 1800, "Ödeme Yöntemi:")
+            painter.drawText(x_left, y, "Ödeme Yöntemi:")
             painter.setFont(font_body)
-            painter.drawText(1500, 1800, yontem)
+            painter.drawText(x_left + 140, y, yontem)
 
+            y += line_h
             painter.setFont(font_subtitle)
-            painter.drawText(400, 2100, "Tahsil Edilen:")
+            painter.drawText(x_left, y, "Tahsil Edilen:")
             painter.setFont(QFont("Helvetica", 12, QFont.Bold))
-            painter.drawText(1500, 2100, f"{tutar} TL")
+            painter.drawText(x_left + 140, y, f"{tutar} TL")
 
+            y += line_h
             # Alt Ayırıcı Çizgi
-            painter.setPen(QPen(QColor(189, 195, 199), 2))
-            painter.drawLine(400, 2300, 4300, 2300)
+            painter.setPen(QPen(QColor(189, 195, 199), 1))
+            painter.drawLine(x_left, y, pw - margin - 20, y)
 
+            y += line_h + 10
             # İmzalar Alanı
             painter.setPen(QPen(QColor(0, 0, 0)))
             painter.setFont(font_subtitle)
-            painter.drawText(600, 2600, "Teslim Eden (Daire)")
-            painter.drawText(3000, 2600, "Tahsil Eden (Yönetim)")
+            painter.drawText(x_left + 80, y, "Teslim Eden (Daire)")
+            painter.drawText(x_left + 2400 if x_left + 2400 < pw else pw - 300, y, "Tahsil Eden (Yönetim)")
             
             painter.setFont(font_footer)
-            painter.drawText(400, 2900, "* Bu belge dijital apartman yönetim sistemi tarafından üretilmiştir.")
+            painter.drawText(x_left, ph - margin - 20, "* Bu belge dijital apartman yönetim sistemi tarafından üretilmiştir.")
 
             painter.end()
             QMessageBox.information(self, "Başarılı", f"Makbuz başarıyla oluşturuldu:\n{path}")
@@ -753,8 +769,8 @@ class ApartmanAidatApp(QWidget):
             out_rows.append((daire_id, daire_no, ad, tel, aidat, borc, odeme, bakiye, durum))
             summary["borc"] += borc
 
-        gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
-        gider = con.execute("SELECT COALESCE(SUM(tutar),0) FROM giderler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
+        gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE donem=", (donem,)).fetchone()[0] or 0.0
+        gider = con.execute("SELECT COALESCE(SUM(tutar),0) FROM giderler WHERE donem=", (donem,)).fetchone()[0] or 0.0
         summary["gelir"] = float(gelir)
         summary["gider"] = float(gider)
         summary["net"] = summary["gelir"] - summary["gider"]
@@ -871,23 +887,32 @@ class ApartmanAidatApp(QWidget):
                 return
             try:
                 # use QPdfWriter + QPainter to render simple text
-                from PySide6.QtGui import QPdfWriter, QPainter, QFont
+                from PySide6.QtGui import QPdfWriter, QPainter, QFont, QPageLayout, QPageSize, QColor, QPen
                 pdf = QPdfWriter(path)
-                pdf.setPageOrientation(pdf.Portrait)
-                pdf.setPageSizeMM(pdf.pageSizeMM())
+                layout = QPageLayout()
+                layout.setPageSize(QPageSize(QPageSize.A4))
+                layout.setOrientation(QPageLayout.Portrait)
+                pdf.setPageLayout(layout)
+
                 painter = QPainter(pdf)
+                page = pdf.pageRect()
+                pw = int(page.width())
+                ph = int(page.height())
+                margin = 40
                 font = QFont("Times", 12)
                 painter.setFont(font)
-                x = 50
-                y = 50
-                painter.drawText(x, y, f"Borç Detayları - Daire ID: {daire_id}")
-                y += 30
+                x = margin
+                y = margin
+                line_h = 24
+                painter.setPen(QPen(QColor(0,0,0)))
+                painter.drawText(x, y + line_h, f"Borç Detayları - Daire ID: {daire_id}")
+                y += line_h * 2
                 painter.drawText(x, y, f"Toplam Borç: {total:.2f} TL")
-                y += 30
+                y += line_h
                 if periods:
                     for donem, kalan in periods:
                         painter.drawText(x, y, f"{donem}: {float(kalan):.2f} TL")
-                        y += 20
+                        y += line_h
                 else:
                     painter.drawText(x, y, "Borç yok.")
                 painter.end()
