@@ -41,7 +41,7 @@ class GiderRaporWidget(QWidget):
         self.btn_gider_save = QPushButton("Gider Kaydet")
         self.btn_gider_save.clicked.connect(self.save_expense)
 
-        gform.addRow("Dönem", self.g_donem)
+        gform.addRow("Dönem (YYYY-MM)", self.g_donem)
         gform.addRow("Tarih (yyyy-mm-dd)", self.g_tarih)
         gform.addRow("Kategori", self.g_kategori)
         gform.addRow("Tutar (TL)", self.g_tutar)
@@ -60,31 +60,32 @@ class GiderRaporWidget(QWidget):
         root.addWidget(gb_gider)
 
         # ---------- Rapor ----------
-        gb_rapor = QGroupBox("Rapor")
+        gb_rapor = QGroupBox("Yıllık Raporlama Yönetimi")
         rbox = QVBoxLayout(gb_rapor)
 
         rtop = QHBoxLayout()
-        self.r_donem = QLineEdit(iso_today()[:7])
+        self.r_yil = QLineEdit(iso_today()[:4])  # Sadece Yıl girişi (Örn: 2026)
+        self.r_yil.setPlaceholderText("YYYY")
         self.r_only_unpaid = QComboBox()
         self.r_only_unpaid.addItems(["Hepsi", "Sadece borçlu", "Sadece geciken"])
-        self.btn_rapor = QPushButton("Raporu Yenile")
+        self.btn_rapor = QPushButton("Yıllık Raporu Yenile")
         self.btn_rapor.clicked.connect(self.refresh_report)
 
-        rtop.addWidget(QLabel("Dönem"))
-        rtop.addWidget(self.r_donem)
-        rtop.addWidget(QLabel("Filtre"))
+        rtop.addWidget(QLabel("Rapor Yılı:"))
+        rtop.addWidget(self.r_yil)
+        rtop.addWidget(QLabel("Filtre:"))
         rtop.addWidget(self.r_only_unpaid)
         rtop.addWidget(self.btn_rapor)
         rbox.addLayout(rtop)
 
-        self.lbl_summary = QLabel("Özet: -")
-        self.lbl_summary.setStyleSheet("font-weight: bold;")
+        self.lbl_summary = QLabel("Yıllık Özet: -")
+        self.lbl_summary.setStyleSheet("font-weight: bold; padding: 5px; background-color: #eef2f3; border-radius: 4px;")
         rbox.addWidget(self.lbl_summary)
 
         self.tbl_rapor = QTableWidget(0, 8)
         self.tbl_rapor.setHorizontalHeaderLabels([
-            "Daire", "Ad Soyad", "Telefon", "Aidat",
-            "Borç", "Ödeme", "Kalan", "Durum"
+            "Daire", "Ad Soyad", "Telefon", "Yıllık Aidat Şablonu",
+            "Toplam Borç", "Toplam Ödeme", "Kalan Borç", "Durum"
         ])
         self.tbl_rapor.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_rapor.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -150,10 +151,13 @@ class GiderRaporWidget(QWidget):
                 self.tbl_gider.setItem(row, c, item)
 
     def refresh_report(self):
-        donem = self.r_donem.text().strip()
-        if not validate_period(donem):
-            QMessageBox.warning(self, "Uyarı", "Dönem formatı YYYY-MM olmalı.")
+        yil = self.r_yil.text().strip()
+        if len(yil) != 4 or not yil.isdigit():
+            QMessageBox.warning(self, "Uyarı", "Geçerli bir yıl formatı giriniz (YYYY).")
             return
+
+        start_date = f"{yil}-01-01"
+        end_date = f"{yil}-12-31"
 
         con = self.db.connect()
         rows = con.execute("""
@@ -165,11 +169,22 @@ class GiderRaporWidget(QWidget):
         summary = {"gelir": 0.0, "gider": 0.0, "net": 0.0, "borc": 0.0}
         out_rows = []
 
+        # Yıllık bazda tüm ayları simüle etmek veya toplamak için döngü oluşturuluyor
         for daire_id, daire_no, ad, tel, aidat, aktif in rows:
-            borc, odeme, bakiye = self.db.get_balance_for_period(int(daire_id), donem)
-            durum = status_for_balance(donem, bakiye)
+            toplam_daire_borc = 0.0
+            toplam_daire_odeme = 0.0
+            
+            # Yılın 12 ayı için daire finansal durumları hesaplanıyor
+            for m in range(1, 13):
+                donem_str = f"{yil}-{m:02d}"
+                borc, odeme, bakiye = self.db.get_balance_for_period(int(daire_id), donem_str)
+                toplam_daire_borc += borc
+                toplam_daire_odeme += odeme
 
-            if self.r_only_unpaid.currentText() == "Sadece borçlu" and bakiye <= 0:
+            toplam_daire_kalan = toplam_daire_borc - toplam_daire_odeme
+            durum = "Ödendi" if toplam_daire_kalan <= 0 else "Gecikmiş"
+
+            if self.r_only_unpaid.currentText() == "Sadece borçlu" and toplam_daire_kalan <= 0:
                 continue
             if self.r_only_unpaid.currentText() == "Sadece geciken" and durum != "Gecikmiş":
                 continue
@@ -179,16 +194,16 @@ class GiderRaporWidget(QWidget):
                 "ad": ad,
                 "tel": tel,
                 "aidat": aidat,
-                "period_borc": borc,
-                "period_odeme": odeme,
-                "period_bakiye": bakiye,
+                "period_borc": toplam_daire_borc,
+                "period_odeme": toplam_daire_odeme,
+                "period_bakiye": toplam_daire_kalan,
                 "durum": durum
             })
+            summary["borc"] += toplam_daire_kalan
 
-            summary["borc"] += borc
-
-        gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
-        gider = con.execute("SELECT COALESCE(SUM(tutar),0) FROM giderler WHERE donem=?", (donem,)).fetchone()[0] or 0.0
+        # Belirtilen yıl aralığındaki tüm genel gelir ve gider tahsilatları toplanıyor
+        gelir = con.execute("SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE tarih >= ? AND tarih <= ?", (start_date, end_date)).fetchone()[0] or 0.0
+        gider = con.execute("SELECT COALESCE(SUM(tutar),0) FROM giderler WHERE tarih >= ? AND tarih <= ?", (start_date, end_date)).fetchone()[0] or 0.0
         summary["gelir"] = float(gelir)
         summary["gider"] = float(gider)
         summary["net"] = summary["gelir"] - summary["gider"]
@@ -196,10 +211,10 @@ class GiderRaporWidget(QWidget):
         con.close()
 
         self.lbl_summary.setText(
-            f"{donem} | Gelir: {summary['gelir']:.2f} TL | "
-            f"Gider: {summary['gider']:.2f} TL | "
-            f"Net: {summary['net']:.2f} TL | "
-            f"Toplam Borç: {summary['borc']:.2f} TL"
+            f"{yil} Yılı Genel Toplamı | Toplam Gelir: {summary['gelir']:.2f} TL | "
+            f"Toplam Gider: {summary['gider']:.2f} TL | "
+            f"Yıl İçi Net Kalan: {summary['net']:.2f} TL | "
+            f"Dairelerin Kalan Birikmiş Borcu: {summary['borc']:.2f} TL"
         )
 
         self.tbl_rapor.setRowCount(0)
@@ -223,7 +238,7 @@ class GiderRaporWidget(QWidget):
                 if c in (3, 4, 5, 6):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if r["period_bakiye"] > 0:
-                    item.setBackground(QColor(255, 200, 200))
+                    item.setBackground(QColor(255, 230, 230))
                 else:
-                    item.setBackground(QColor(200, 255, 205))
+                    item.setBackground(QColor(230, 255, 235))
                 self.tbl_rapor.setItem(row, c, item)
