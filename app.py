@@ -52,6 +52,8 @@ class ApartmanAidatApp(QWidget):
         self.db = DbManager()
         self.db.init_db()
         self.check_and_update_db_schema()
+        # Otomatik tahakkuk kontrolünü başlatıyoruz
+        self.check_and_auto_generate_tahakkuk() 
         self.setWindowTitle("Apartman Aidat Sistemi - Yönetim Paneli")
         self.resize(1250, 850)
         self.build_ui()
@@ -71,7 +73,41 @@ class ApartmanAidatApp(QWidget):
             print(f"Veritabanı güncelleme hatası: {e}")
         finally:
             con.close()
-
+    def check_and_auto_generate_tahakkuk(self):
+        """Her ay başında veya ay içinde uygulama ilk açıldığında eksik tahakkukları otomatik üretir."""
+        current_period = ym_of_today() # Örn: '2026-11'
+        today_date = iso_today()       # Örn: '2026-11-02'
+        con = self.db.connect()
+        try:
+            # 1. Aktif daireleri ve sabit aidat tutarlarını alıyoruz
+            aktif_daireler = con.execute(
+                "SELECT id, daire_no, aidat FROM daireler WHERE aktif = 1"
+            ).fetchall()
+            
+            generated_count = 0
+            for did, dno, aidat in aktif_daireler:
+                # 2. Bu daire için mevcut aya ait tahakkuk var mı kontrol ediyoruz
+                exists = con.execute(
+                    "SELECT 1 FROM tahakkuk WHERE daire_id = ? AND donem = ?",
+                    (int(did), current_period)
+                ).fetchone()
+                
+                # 3. Eğer tahakkuk yoksa ve sabit aidat tanımlıysa otomatik oluşturuyoruz
+                # created_at kısıtlamasını aşmak için bugünün tarihini de ekliyoruz
+                if not exists and aidat > 0:
+                    con.execute(
+                        "INSERT INTO tahakkuk (daire_id, donem, tutar, created_at) VALUES (?, ?, ?, ?)",
+                        (int(did), current_period, float(aidat), today_date)
+                    )
+                    generated_count += 1
+            
+            if generated_count > 0:
+                con.commit()
+                print(f"{current_period} dönemi için {generated_count} adet otomatik tahakkuk üretildi.")
+        except Exception as e:
+            print(f"Otomatik tahakkuk üretme hatası: {e}")
+        finally:
+            con.close()
     def apply_modern_theme(self):
         self.setStyleSheet(
             "QWidget{background-color:#f4f6f7;font-family:'Segoe UI';font-size:13px;color:#212529;}"
@@ -912,7 +948,7 @@ class ApartmanAidatApp(QWidget):
         bx.addWidget(btn_x)
         lay.addLayout(bx)
 
-        def pdf_ekstre_save():
+        def pdf_ekstre_save(self):
             raw_start = txt_start.text().strip()
             raw_end = txt_end.text().strip()
             s_date = raw_start.replace("-", ".")
@@ -926,7 +962,8 @@ class ApartmanAidatApp(QWidget):
                 return
             try:
                 pdf = QPdfWriter(path)
-                layout = QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Portrait, QMarginsF(15, 15, 15, 15))
+                # Dikey (Portrait) A4 formatı
+                layout = QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Portrait, QMarginsF(10, 10, 10, 10))
                 pdf.setPageLayout(layout)
                 painter = QPainter()
                 if not painter.begin(pdf):
@@ -941,110 +978,119 @@ class ApartmanAidatApp(QWidget):
                 devir_bakiyesi = float(db_acilis) + float(eski_borclar) - float(eski_odemeler)
 
                 db_tahakkuklar = con.execute(
-                    "SELECT donem, tutar FROM tahakkuk WHERE daire_id = ? AND donem >= ? AND donem <= ? ORDER BY donem ASC",
+                    "SELECT id, donem, tutar FROM tahakkuk WHERE daire_id = ? AND donem >= ? AND donem <= ? ORDER BY donem ASC",
                     (int(did), start_period, end_period)
                 ).fetchall()
                 db_odemeler = con.execute(
-                    "SELECT donem, tarih, tutar, yontem FROM odemeler WHERE daire_id = ? AND tarih BETWEEN ? AND ? ORDER BY tarih ASC",
+                    "SELECT id, donem, tarih, tutar, yontem FROM odemeler WHERE daire_id = ? AND tarih BETWEEN ? AND ? ORDER BY tarih ASC",
                     (int(did), raw_start, raw_end)
                 ).fetchall()
                 con.close()
 
                 ekstre_items = []
-                for dnm, tutar in db_tahakkuklar:
+                for tid, dnm, tutar in db_tahakkuklar:
                     sanal_tarih = f"{dnm}-01"
-                    ekstre_items.append((sanal_tarih, dnm, f"{dnm} Dönemi Aidat Borcu", "-", float(tutar), "BORÇ"))
-                for dnm, trh, tutar, yntm in db_odemeler:
+                    ekstre_items.append((sanal_tarih, dnm, "Tahakkuk", f"{dnm} Aidat", f"#{tid}", float(tutar), 0.0, "BORC"))
+                
+                for pid, dnm, trh, tutar, yntm in db_odemeler:
                     t_goster = str(trh).replace("-", ".")
-                    ekstre_items.append((str(trh), dnm, f"{t_goster} Tarihli Aidat Ödemesi" if dnm != "DEVİR" else "Geçmiş Dönem Devir Borcu", yntm, float(tutar), "ÖDEME"))
-                ekstre_items.sort(key=lambda x: x)
-
-                total_borc_sum = 0.0
-                total_odeme_sum = 0.0
+                    aciklama = f"{t_goster} Ödeme" if dnm != "DEVİR" else "Devir Ödemesi"
+                    ekstre_items.append((str(trh), dnm if dnm != "DEVİR" else "", "Ödeme", aciklama, f"#{pid}", 0.0, float(tutar), "ODEME"))
+                
+                ekstre_items.sort(key=lambda x: (x[0], 0 if x[2] == "Tahakkuk" else 1))
 
                 def draw_page_headers():
                     painter.setPen(QPen(QColor(52, 73, 94), int(1 * mx)))
-                    painter.drawRect(int(10 * mx), int(10 * my), int(190 * mx), int(265 * my))
+                    painter.drawRect(int(10 * mx), int(10 * my), int(190 * mx), int(275 * my)) # Dikey A4 sınırları (Genişlik: 190mm)
                     painter.setPen(QPen(QColor(52, 73, 94)))
-                    painter.setFont(QFont("Helvetica", 16, 75))
-                    painter.drawText(int(15 * mx), int(25 * my), "DAİRE HESAP EKSTRESİ RAPORU")
-                    painter.setFont(QFont("Helvetica", 10))
-                    painter.drawText(int(145 * mx), int(23 * my), f"Düzenleme T.: {iso_today().replace('-', '.')}")
-                    painter.drawLine(int(15 * mx), int(28 * my), int(190 * mx), int(28 * my))
-                    painter.setFont(QFont("Helvetica", 11, 75))
-                    painter.drawText(int(15 * mx), int(38 * my), "Mülk Bilgisi : ")
-                    painter.setFont(QFont("Helvetica", 11))
-                    painter.drawText(int(45 * mx), int(38 * my), f"Daire {dno} - {d_isim}")
-                    painter.setFont(QFont("Helvetica", 11, 75))
-                    painter.drawText(int(15 * mx), int(45 * my), "Ekstre Dönemi: ")
-                    painter.setFont(QFont("Helvetica", 11))
-                    painter.drawText(int(45 * mx), int(45 * my), f"{s_date} - {e_date} Tarihleri Arası")
+                    painter.setFont(QFont("Helvetica", 13, 75))
+                    painter.drawText(int(15 * mx), int(20 * my), "HESAP EKSTRESİ")
+                    painter.setFont(QFont("Helvetica", 9))
+                    painter.drawText(int(135 * mx), int(20 * my), f"Düzenleme T.: {iso_today().replace('-', '.')}")
+                    painter.drawLine(int(15 * mx), int(24 * my), int(185 * mx), int(24 * my))
+                    
+                    painter.setFont(QFont("Helvetica", 9, 75))
+                    painter.drawText(int(15 * mx), int(31 * my), "Mülk Bilgisi :")
+                    painter.setFont(QFont("Helvetica", 9))
+                    painter.drawText(int(38 * mx), int(31 * my), f"Daire {dno} - {d_isim}")
+                    
+                    painter.setFont(QFont("Helvetica", 9, 75))
+                    painter.drawText(int(15 * mx), int(37 * my), "Ekstre Dönemi:")
+                    painter.setFont(QFont("Helvetica", 9))
+                    painter.drawText(int(38 * mx), int(37 * my), f"{s_date} - {e_date}")
+                    
                     painter.setPen(QPen(QColor(189, 195, 199), int(0.5 * mx)))
-                    painter.drawLine(int(15 * mx), int(53 * my), int(190 * mx), int(53 * my))
+                    painter.drawLine(int(15 * mx), int(42 * my), int(185 * mx), int(42 * my))
+                    
+                    # Dikey Sütun Başlıkları (Optimize Edilmiş X Koordinatları)
                     painter.setPen(QPen(QColor(52, 73, 94)))
-                    painter.setFont(QFont("Helvetica", 10, 75))
-                    painter.drawText(int(20 * mx), int(60 * my), "İşlem Dönemi")
-                    painter.drawText(int(60 * mx), int(60 * my), "Açıklama / İşlem Türü")
-                    painter.drawText(int(120 * mx), int(60 * my), "Yöntem")
-                    painter.drawText(int(160 * mx), int(60 * my), "Tutar")
+                    painter.setFont(QFont("Helvetica", 8, 75))
+                    painter.drawText(int(14 * mx), int(48 * my), "Tarih")
+                    painter.drawText(int(35 * mx), int(48 * my), "Dönem")
+                    painter.drawText(int(54 * mx), int(48 * my), "Hareket")
+                    painter.drawText(int(78 * mx), int(48 * my), "Açıklama")
+                    painter.drawText(int(122 * mx), int(48 * my), "Belge")
+                    painter.drawText(int(142 * mx), int(48 * my), "Borç")
+                    painter.drawText(int(159 * mx), int(48 * my), "Alacak")
+                    painter.drawText(int(173 * mx), int(48 * my), "Bakiye")
+                    
                     painter.setPen(QPen(QColor(189, 195, 199), int(0.5 * mx)))
-                    painter.drawLine(int(15 * mx), int(65 * my), int(190 * mx), int(65 * my))
+                    painter.drawLine(int(15 * mx), int(52 * my), int(185 * mx), int(52 * my))
 
                 draw_page_headers()
-                y_mm = 73
-                painter.setFont(QFont("Helvetica", 10, 75))
+                y_mm = 59
+                
+                current_bakiye = devir_bakiyesi
+                painter.setFont(QFont("Helvetica", 8))
                 painter.setPen(QPen(QColor(44, 62, 80)))
-                painter.drawText(int(20 * mx), int(y_mm * my), "DEVİR")
-                painter.drawText(int(60 * mx), int(y_mm * my), "Sistem Açılış / Geçmiş Dönem Toplam Devir")
-                painter.drawText(int(120 * mx), int(y_mm * my), "Sistem")
-                isaret_devir = "+" if devir_bakiyesi >= 0 else ""
-                painter.drawText(int(160 * mx), int(y_mm * my), f"{isaret_devir}{devir_bakiyesi:.2f} TL")
-                y_mm += 8
+                painter.drawText(int(14 * mx), int(y_mm * my), s_date)
+                painter.drawText(int(54 * mx), int(y_mm * my), "Devir")
+                painter.drawText(int(78 * mx), int(y_mm * my), "Geçmiş Devir")
+                painter.drawText(int(142 * mx), int(y_mm * my), "0,00")
+                painter.drawText(int(159 * mx), int(y_mm * my), "0,00")
+                painter.drawText(int(173 * mx), int(y_mm * my), f"{current_bakiye:,.2f}")
+                y_mm += 6
 
-                for s_tarih, dnm, acik, yntm, tutar, tur in ekstre_items:
-                    if y_mm > 245:
+                for trh, dnm, hareket, acik, odeme_no, borc, alacak, tur in ekstre_items:
+                    if y_mm > 265:
                         pdf.newPage()
                         draw_page_headers()
-                        y_mm = 73
-                    painter.setFont(QFont("Helvetica", 10))
-                    painter.setPen(QPen(QColor(192, 57, 43) if tur == "BORÇ" else QColor(39, 174, 96)))
-                    painter.drawText(int(20 * mx), int(y_mm * my), str(dnm))
-                    painter.drawText(int(60 * mx), int(y_mm * my), str(acik))
-                    painter.drawText(int(120 * mx), int(y_mm * my), str(yntm))
-                    isaret = "+" if tur == "BORÇ" else "-"
-                    painter.drawText(int(160 * mx), int(y_mm * my), f"{isaret}{tutar:.2f} TL")
-                    if tur == "BORÇ":
-                        total_borc_sum += tutar
-                    else:
-                        total_odeme_sum += tutar
-                    y_mm += 8
+                        y_mm = 59
 
-                if y_mm > 225:
-                    pdf.newPage()
-                    draw_page_headers()
-                    y_mm = 73
+                    if tur == "BORC":
+                        current_bakiye += borc
+                    else:
+                        current_bakiye -= alacak
+
+                    t_goster = str(trh).replace("-", ".")
+                    painter.setFont(QFont("Helvetica", 8))
+                    painter.setPen(QPen(QColor(192, 57, 43) if tur == "BORC" else QColor(39, 174, 96)))
+                    
+                    painter.drawText(int(14 * mx), int(y_mm * my), t_goster)
+                    painter.drawText(int(35 * mx), int(y_mm * my), str(dnm))
+                    painter.drawText(int(54 * mx), int(y_mm * my), hareket)
+                    painter.drawText(int(78 * mx), int(y_mm * my), acik)
+                    painter.drawText(int(122 * mx), int(y_mm * my), odeme_no)
+                    
+                    if borc > 0:
+                        painter.drawText(int(142 * mx), int(y_mm * my), f"{borc:,.2f}")
+                    if alacak > 0:
+                        painter.drawText(int(159 * mx), int(y_mm * my), f"{alacak:,.2f}")
+                    
+                    painter.setPen(QPen(QColor(44, 62, 80)))
+                    painter.drawText(int(173 * mx), int(y_mm * my), f"{current_bakiye:,.2f}")
+                    y_mm += 6
 
                 painter.setPen(QPen(QColor(149, 165, 166), int(0.5 * mx)))
-                painter.drawLine(int(15 * mx), int(y_mm * my), int(190 * mx), int(y_mm * my))
-                y_mm += 8
-                painter.setFont(QFont("Helvetica", 11, 75))
+                painter.drawLine(int(15 * mx), int(y_mm * my), int(185 * mx), int(y_mm * my))
+                y_mm += 7
+                
+                painter.setFont(QFont("Helvetica", 9, 75))
                 painter.setPen(QPen(QColor(52, 73, 94)))
-                painter.drawText(int(50 * mx), int(y_mm * my), f"Sistem Açılış ve Geçmiş Devir Bakiyesi: {devir_bakiyesi:.2f} TL")
-                y_mm += 7
-                painter.drawText(int(50 * mx), int(y_mm * my), f"Seçilen Dönem İçi Borç (+): {total_borc_sum:.2f} TL")
-                y_mm += 7
-                painter.setPen(QPen(QColor(39, 174, 96)))
-                painter.drawText(int(50 * mx), int(y_mm * my), f"Seçilen Dönem İçi Tahsilat (-): {total_odeme_sum:.2f} TL")
-                y_mm += 8
-
-                kalan_net_bakiye = devir_bakiyesi + total_borc_sum - total_odeme_sum
-                painter.setPen(QPen(QColor(192, 57, 43) if kalan_net_bakiye > 0 else QColor(39, 174, 96)))
-                painter.drawText(int(50 * mx), int(y_mm * my), f"GÜNCEL TOPLAM NET BORÇ BAKİYESİ: {kalan_net_bakiye:.2f} TL")
-                painter.setPen(QPen(QColor(127, 140, 141)))
-                painter.setFont(QFont("Helvetica", 9, -1, True))
-                painter.drawText(int(15 * mx), int(262 * my), "Bu döküm, apartman otomasyonu mali ekstre modülü tarafından güvenli veritabanından üretilmiştir.")
+                painter.drawText(int(115 * mx), int(y_mm * my), f"NET BORÇ: {current_bakiye:,.2f} TL")
+                
                 painter.end()
-                QMessageBox.information(dlg, "Başarılı", "Daire hesap ekstresi devir dengeli olarak PDF formatında başarıyla kaydedildi.")
+                QMessageBox.information(dlg, "Başarılı", "Hesap ekstresi dikey formatta PDF olarak kaydedildi.")
             except Exception as e:
                 QMessageBox.warning(dlg, "Hata", f"PDF üretilemedi: {e}")
 
