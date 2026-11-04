@@ -217,7 +217,12 @@ class DbManager:
 
     def get_all_daireler(self):
         con = self.connect()
-        rows = con.execute("SELECT id, daire_no, ad_soyad, telefon, aidat, aktif FROM daireler ORDER BY CAST(daire_no AS INTEGER), daire_no").fetchall()
+        rows = con.execute(
+            "SELECT id, daire_no, ad_soyad, telefon, aidat, "
+            "COALESCE(acilis_bakiyesi, 0.0), aktif "
+            "FROM daireler "
+            "ORDER BY CAST(daire_no AS INTEGER), daire_no"
+        ).fetchall()
         con.close()
         return rows
 
