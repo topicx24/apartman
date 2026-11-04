@@ -421,19 +421,29 @@ class ApartmanAidatApp(QWidget):
         self.daire_aktif.setCurrentText(self.tbl_daire.item(row, 6).text())
         self.btn_save_daire.setText("Daire Bilgilerini Güncelle")
 
-    def delete_selected_daire(self):
-        row = self.tbl_daire.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Uyarı", "Daire seçin.")
-            return
-        did = self.tbl_daire.item(row, 0).text()
-        if QMessageBox.question(self, "Onay", "Seçili daire silinsin mi?") != QMessageBox.Yes:
-            return
-        con = self.db.connect()
-        con.execute("DELETE FROM daireler WHERE id=?", (int(did),))
+    def delete_selected_payment(self):
+    row = self.tbl_gecmis_odemeler.currentRow()
+    if row < 0:
+        QMessageBox.warning(self, "Uyarı", "Ödeme seçin.")
+        return
+
+    pid = int(self.tbl_gecmis_odemeler.item(row, 0).text())
+    if QMessageBox.question(self, "Onay", "Silinsin mi?") != QMessageBox.Yes:
+        return
+
+    con = self.db.connect()
+    try:
+        con.execute("DELETE FROM odeme_detay WHERE odeme_id = ?", (pid,))
+        con.execute("DELETE FROM odemeler WHERE id = ?", (pid,))
         con.commit()
+    except Exception as e:
+        con.rollback()
+        QMessageBox.warning(self, "Hata", f"Ödeme silinemedi: {e}")
+        return
+    finally:
         con.close()
-        self.refresh_all()
+
+    self.refresh_all()
 
     def on_debt_double_clicked(self, item):
         row = item.row()
@@ -544,6 +554,9 @@ class ApartmanAidatApp(QWidget):
         except:
             QMessageBox.warning(self, "Uyarı", "Tutar sayısal olmalı.")
             return
+         if tutar <= 0:
+             QMessageBox.warning(self, "Uyarı", "Ödeme tutarı 0'dan büyük olmalıdır.")
+             return   
         alloc = [(donem, tutar)]
         try:
             makbuz = self.db.save_payment(
@@ -848,7 +861,9 @@ class ApartmanAidatApp(QWidget):
             return
         
         clean_phone = "".join(filter(str.isdigit, phone))
-        if not clean_phone.startswith("90") and len(clean_phone) == 10:
+        if clean_phone.startswith("0") and len(clean_phone) == 11:
+            clean_phone = "90" + clean_phone[1:]
+        elif not clean_phone.startswith("90") and len(clean_phone) == 10:
             clean_phone = "90" + clean_phone
 
         message = (
