@@ -422,10 +422,10 @@ class ApartmanAidatApp(QWidget):
         self.btn_save_daire.setText("Daire Bilgilerini Güncelle")
 
     def delete_selected_payment(self):
-    row = self.tbl_gecmis_odemeler.currentRow()
-    if row < 0:
-        QMessageBox.warning(self, "Uyarı", "Ödeme seçin.")
-        return
+        row = self.tbl_gecmis_odemeler.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Uyarı", "Ödeme seçin.")
+            return
 
     pid = int(self.tbl_gecmis_odemeler.item(row, 0).text())
     if QMessageBox.question(self, "Onay", "Silinsin mi?") != QMessageBox.Yes:
@@ -549,14 +549,16 @@ class ApartmanAidatApp(QWidget):
         if donem.upper() != "DEVİR" and not validate_period(donem):
             QMessageBox.warning(self, "Uyarı", "Geçersiz dönem formatı.")
             return
-        try:
+         try:
             tutar = safe_float(self.p_tutar.text())
         except:
             QMessageBox.warning(self, "Uyarı", "Tutar sayısal olmalı.")
             return
-         if tutar <= 0:
-             QMessageBox.warning(self, "Uyarı", "Ödeme tutarı 0'dan büyük olmalıdır.")
-             return   
+
+        if tutar <= 0:
+            QMessageBox.warning(self, "Uyarı", "Ödeme tutarı 0'dan büyük olmalıdır.")
+            return
+
         alloc = [(donem, tutar)]
         try:
             makbuz = self.db.save_payment(
@@ -615,14 +617,23 @@ class ApartmanAidatApp(QWidget):
         if row < 0:
             QMessageBox.warning(self, "Uyarı", "Ödeme seçin.")
             return
-        pid = self.tbl_gecmis_odemeler.item(row, 0).text()
+
+        pid = int(self.tbl_gecmis_odemeler.item(row, 0).text())
         if QMessageBox.question(self, "Onay", "Silinsin mi?") != QMessageBox.Yes:
             return
+
         con = self.db.connect()
-        con.execute("PRAGMA foreign_keys = OFF")
-        con.execute("DELETE FROM odemeler WHERE id=?", (int(pid),))
-        con.commit()
-        con.close()
+        try:
+            con.execute("DELETE FROM odeme_detay WHERE odeme_id = ?", (pid,))
+            con.execute("DELETE FROM odemeler WHERE id = ?", (pid,))
+            con.commit()
+        except Exception as e:
+            con.rollback()
+            QMessageBox.warning(self, "Hata", f"Ödeme silinemedi: {e}")
+            return
+        finally:
+            con.close()
+
         self.refresh_all()
 
     def print_selected_receipt(self):
