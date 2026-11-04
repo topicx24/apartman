@@ -52,8 +52,6 @@ class ApartmanAidatApp(QWidget):
         self.db = DbManager()
         self.db.init_db()
         self.check_and_update_db_schema()
-        # Otomatik tahakkuk kontrolünü başlatıyoruz
-        self.check_and_auto_generate_tahakkuk() 
         self.setWindowTitle("Apartman Aidat Sistemi - Yönetim Paneli")
         self.resize(1250, 850)
         self.build_ui()
@@ -73,41 +71,7 @@ class ApartmanAidatApp(QWidget):
             print(f"Veritabanı güncelleme hatası: {e}")
         finally:
             con.close()
-    def check_and_auto_generate_tahakkuk(self):
-        """Her ay başında veya ay içinde uygulama ilk açıldığında eksik tahakkukları otomatik üretir."""
-        current_period = ym_of_today() # Örn: '2026-11'
-        today_date = iso_today()       # Örn: '2026-11-02'
-        con = self.db.connect()
-        try:
-            # 1. Aktif daireleri ve sabit aidat tutarlarını alıyoruz
-            aktif_daireler = con.execute(
-                "SELECT id, daire_no, aidat FROM daireler WHERE aktif = 1"
-            ).fetchall()
-            
-            generated_count = 0
-            for did, dno, aidat in aktif_daireler:
-                # 2. Bu daire için mevcut aya ait tahakkuk var mı kontrol ediyoruz
-                exists = con.execute(
-                    "SELECT 1 FROM tahakkuk WHERE daire_id = ? AND donem = ?",
-                    (int(did), current_period)
-                ).fetchone()
-                
-                # 3. Eğer tahakkuk yoksa ve sabit aidat tanımlıysa otomatik oluşturuyoruz
-                # created_at kısıtlamasını aşmak için bugünün tarihini de ekliyoruz
-                if not exists and aidat > 0:
-                    con.execute(
-                        "INSERT INTO tahakkuk (daire_id, donem, tutar, created_at) VALUES (?, ?, ?, ?)",
-                        (int(did), current_period, float(aidat), today_date)
-                    )
-                    generated_count += 1
-            
-            if generated_count > 0:
-                con.commit()
-                print(f"{current_period} dönemi için {generated_count} adet otomatik tahakkuk üretildi.")
-        except Exception as e:
-            print(f"Otomatik tahakkuk üretme hatası: {e}")
-        finally:
-            con.close()
+
     def apply_modern_theme(self):
         self.setStyleSheet(
             "QWidget{background-color:#f4f6f7;font-family:'Segoe UI';font-size:13px;color:#212529;}"
@@ -421,29 +385,19 @@ class ApartmanAidatApp(QWidget):
         self.daire_aktif.setCurrentText(self.tbl_daire.item(row, 6).text())
         self.btn_save_daire.setText("Daire Bilgilerini Güncelle")
 
-    def delete_selected_payment(self):
-        row = self.tbl_gecmis_odemeler.currentRow()
+    def delete_selected_daire(self):
+        row = self.tbl_daire.currentRow()
         if row < 0:
-            QMessageBox.warning(self, "Uyarı", "Ödeme seçin.")
+            QMessageBox.warning(self, "Uyarı", "Daire seçin.")
             return
-
-    pid = int(self.tbl_gecmis_odemeler.item(row, 0).text())
-    if QMessageBox.question(self, "Onay", "Silinsin mi?") != QMessageBox.Yes:
-        return
-
-    con = self.db.connect()
-    try:
-        con.execute("DELETE FROM odeme_detay WHERE odeme_id = ?", (pid,))
-        con.execute("DELETE FROM odemeler WHERE id = ?", (pid,))
+        did = self.tbl_daire.item(row, 0).text()
+        if QMessageBox.question(self, "Onay", "Seçili daire silinsin mi?") != QMessageBox.Yes:
+            return
+        con = self.db.connect()
+        con.execute("DELETE FROM daireler WHERE id=?", (int(did),))
         con.commit()
-    except Exception as e:
-        con.rollback()
-        QMessageBox.warning(self, "Hata", f"Ödeme silinemedi: {e}")
-        return
-    finally:
         con.close()
-
-    self.refresh_all()
+        self.refresh_all()
 
     def on_debt_double_clicked(self, item):
         row = item.row()
@@ -549,16 +503,11 @@ class ApartmanAidatApp(QWidget):
         if donem.upper() != "DEVİR" and not validate_period(donem):
             QMessageBox.warning(self, "Uyarı", "Geçersiz dönem formatı.")
             return
-         try:
+        try:
             tutar = safe_float(self.p_tutar.text())
         except:
             QMessageBox.warning(self, "Uyarı", "Tutar sayısal olmalı.")
             return
-
-        if tutar <= 0:
-            QMessageBox.warning(self, "Uyarı", "Ödeme tutarı 0'dan büyük olmalıdır.")
-            return
-
         alloc = [(donem, tutar)]
         try:
             makbuz = self.db.save_payment(
@@ -617,23 +566,14 @@ class ApartmanAidatApp(QWidget):
         if row < 0:
             QMessageBox.warning(self, "Uyarı", "Ödeme seçin.")
             return
-
-        pid = int(self.tbl_gecmis_odemeler.item(row, 0).text())
+        pid = self.tbl_gecmis_odemeler.item(row, 0).text()
         if QMessageBox.question(self, "Onay", "Silinsin mi?") != QMessageBox.Yes:
             return
-
         con = self.db.connect()
-        try:
-            con.execute("DELETE FROM odeme_detay WHERE odeme_id = ?", (pid,))
-            con.execute("DELETE FROM odemeler WHERE id = ?", (pid,))
-            con.commit()
-        except Exception as e:
-            con.rollback()
-            QMessageBox.warning(self, "Hata", f"Ödeme silinemedi: {e}")
-            return
-        finally:
-            con.close()
-
+        con.execute("PRAGMA foreign_keys = OFF")
+        con.execute("DELETE FROM odemeler WHERE id=?", (int(pid),))
+        con.commit()
+        con.close()
         self.refresh_all()
 
     def print_selected_receipt(self):
@@ -872,9 +812,7 @@ class ApartmanAidatApp(QWidget):
             return
         
         clean_phone = "".join(filter(str.isdigit, phone))
-        if clean_phone.startswith("0") and len(clean_phone) == 11:
-            clean_phone = "90" + clean_phone[1:]
-        elif not clean_phone.startswith("90") and len(clean_phone) == 10:
+        if not clean_phone.startswith("90") and len(clean_phone) == 10:
             clean_phone = "90" + clean_phone
 
         message = (
@@ -974,7 +912,7 @@ class ApartmanAidatApp(QWidget):
         bx.addWidget(btn_x)
         lay.addLayout(bx)
 
-        def pdf_ekstre_save(self):
+        def pdf_ekstre_save():
             raw_start = txt_start.text().strip()
             raw_end = txt_end.text().strip()
             s_date = raw_start.replace("-", ".")
